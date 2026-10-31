@@ -1,7 +1,7 @@
 # Hyundai — launcher para la tablet del carro
 
 Un launcher de Android hecho a la medida para convertir una tablet vieja en la pantalla del
-**Hyundai Accent 2017** (sedán, rojo). Reemplaza la pantalla de inicio de la tablet con un tablero
+**Hyundai Accent RB 2017 CRDi** (sedán, blanco; variante GL según identificación del propietario). Reemplaza la pantalla de inicio de la tablet con un tablero
 estilo vidrio: auto en 3D, velocímetro GPS, clima, música, navegación en pantalla dividida con Waze
 y encendido/apagado automático con la corriente del carro.
 
@@ -93,7 +93,7 @@ y las animaciones están limitadas a ~30 cuadros por segundo para no calentar ni
 
 **Pantalla de inicio**
 - Saludo según la hora ("Hola Alfre, buenos días / buenas tardes / buenas noches").
-- Hyundai Accent rojo en 360°: se gira con el dedo, con inercia.
+- Hyundai Accent RB blanco en 360°: se gira con el dedo, con inercia.
 - Velocímetro con aguja, marcas y velocidad del GPS de la tablet.
 - Clima propio de la tablet (Open-Meteo, sin cuenta): sol o luna según el día o la noche,
   descripción y sensación térmica en un numerito gris junto a la temperatura.
