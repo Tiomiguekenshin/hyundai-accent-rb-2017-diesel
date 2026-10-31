@@ -32,7 +32,7 @@ Save-AdbOutput "settings get secure enabled_accessibility_services" "accessibili
 
 $homeOutput = & adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1
 $homeOutput | Out-File (Join-Path $out "current-home.txt") -Encoding utf8
-$component = ($homeOutput | Select-String "/"). | Select-Object -Last 1
+$component = $homeOutput | Select-String "/" | Select-Object -Last 1
 if ($component) {
     $packageName = ($component.Line.Trim() -split "/")[0]
     "HOME package: $packageName" | Out-File (Join-Path $out "home-package.txt") -Encoding utf8
