@@ -1,0 +1,156 @@
+From 74558f0320006a6c403ca37a62d66a41336d7802 Mon Sep 17 00:00:00 2001
+From: audit <audit@example.invalid>
+Date: Sun, 1 Nov 2026 02:06:19 +0000
+Subject: [PATCH 7/7] Docs: TEST_RESULTS, changelog rows 7-10, README and
+ install/rollback aligned with normal-app, opt-in automation
+
+---
+ README.md                    |  6 ++++--
+ docs/CHANGELOG-K2001N.md     | 16 ++++++++------
+ docs/INSTALL-AND-ROLLBACK.md |  7 +++++-
+ docs/TEST_RESULTS.md         | 42 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 62 insertions(+), 9 deletions(-)
+ create mode 100644 docs/TEST_RESULTS.md
+
+diff --git a/README.md b/README.md
+index c67d3df..442ec30 100644
+--- a/README.md
++++ b/README.md
+@@ -5,6 +5,8 @@ Un launcher de Android hecho a la medida para convertir una tablet vieja en la p
+ estilo vidrio: auto en 3D, velocímetro GPS, clima, música, navegación en pantalla dividida con Waze
+ y encendido/apagado automático con la corriente del carro.
+ 
++> **Versión de auditoría K2001N (rama `work/k2001n-android15-audit`):** se instala como **app normal**: no declara la categoría HOME y no reemplaza el launcher de la radio. La automatización con el carro (abrirse sola, encender pantalla, cambiar tiempo de pantalla, Bluetooth y música) viene **desactivada** y se activa desde el menú ⏻. Estado de verificación en `docs/TEST_RESULTS.md`.
++
+ > Proyecto personal, sin fines comerciales y sin relación con Hyundai Motor Company.
+ > "Hyundai" y su logo son marcas de su respectivo dueño.
+ 
+@@ -128,7 +130,7 @@ y las animaciones están limitadas a ~30 cuadros por segundo para no calentar ni
+ ```
+ AutoSense/            App del launcher (paquete com.autosense.launcher, nombre visible "Hyundai")
+   app/src/main/java/com/autosense/launcher/
+-    MainActivity.kt       Pantalla de inicio (HOME)
++    MainActivity.kt       Pantalla principal (sin categoría HOME en esta versión)
+     DockActivity.kt       Tablero del modo manejo (pantalla dividida)
+     Dashboard.kt          Lógica compartida: reloj, clima, música, GPS, sensores, pestañas
+     SplitScreen.kt        Servicio de accesibilidad: pantalla dividida, botones flotantes
+@@ -151,7 +153,7 @@ tools/render/         Página three.js que generó los cuadros del auto a partir
+ 1. Instala Android Studio y abre la carpeta `AutoSense` (Kotlin, minSdk 24, compileSdk 34).
+ 2. En la tablet activa **Opciones de desarrollador → Depuración USB** y conéctala por USB.
+ 3. Ejecuta la app (▶) o `./gradlew installDebug`.
+-4. Presiona Home y elige **Hyundai** como launcher predeterminado ("Siempre").
++4. En esta versión **no** se elige como launcher predeterminado: se abre desde su icono "Hyundai". Ver `docs/INSTALL-AND-ROLLBACK.md`.
+ 5. Permisos que la app pide o necesitan activarse a mano:
+    - Ubicación (velocímetro y clima).
+    - **Accesibilidad → Hyundai · Pantalla dividida** (pantalla dividida y botones flotantes).
+diff --git a/docs/CHANGELOG-K2001N.md b/docs/CHANGELOG-K2001N.md
+index 99d6902..be0c112 100644
+--- a/docs/CHANGELOG-K2001N.md
++++ b/docs/CHANGELOG-K2001N.md
+@@ -12,22 +12,26 @@ Rama: `work/k2001n-android15-audit`. Estado: **cambios sin compilar** (ver "Veri
+ | 5 | `Dashboard.kt` | La velocidad se mostraba con cualquier fix que trajera `hasSpeed()`, sin validar antigüedad; sin permiso de ubicación no se indicaba "sin señal". | Solo se muestra velocidad de un fix de ≤5 s; si no, o sin permiso, se muestra sin señal (-1). Limitación: no hay temporizador que marque "sin señal" si el GPS deja de emitir fixes. |
+ | 4 | `AndroidManifest.xml` | `BootReceiver` exportado sin necesidad (solo recibe `BOOT_COMPLETED`, difusión del sistema). | `exported="false"`. |
+ | 6 | `AndroidManifest.xml` | `MainActivity` declaraba `category.HOME`: Android ofrecía AutoSense como inicio al pulsar Home. | Categoría HOME **eliminada** (decisión del propietario): se instala como app normal con icono LAUNCHER. Para ofrecerla otra vez como inicio habrá que reponerla de forma explícita. |
++| 7 | `GpsFixPolicy.kt`, `Dashboard.kt` | La regla de frescura del GPS estaba dentro de la vista (no probable) y `roundToInt()` lanza `IllegalArgumentException` con NaN. | Regla extraída a una función pura; NaN, infinito o negativo = sin señal; el caso normal no cambia. |
++| 8 | `WeatherLocationPolicy.kt`, `ForecastWeather.kt` | Sin ubicación se pedía el pronóstico de Ciudad de México (dato de otra ciudad en el tablero). | Sin ubicación válida no se descarga; se validan rangos de latitud y longitud. |
++| 9 | `AutoStart*.kt`, `CarPower.kt`, `PowerMenu.kt` | Al arrancar o dar corriente la app se abría sola, encendía la pantalla, cambiaba el tiempo de pantalla del sistema, encendía Bluetooth y reanudaba música. | Todo eso queda **desactivado por defecto**; se activa desde el menú ⏻ ("Automatización del auto"). Los indicadores de la pantalla siguen funcionando. |
++| 10 | `build.gradle.kts`, `app/src/test` | No había pruebas unitarias. | JUnit 4 (solo pruebas, no entra al APK) y 20 pruebas JVM, incluida una que protege las decisiones del manifest. |
+ 
+ Los nombres de clases del manifest (`SplitScreenService`, `ScreenOffAdmin`, `BootReceiver`, `MediaListenerService`, `DriveOverlayService`, `DockActivity`, `AppsActivity`) **coinciden** con las clases reales.
+ 
+ ## Hallazgos NO corregidos (requieren decisión o datos)
+ 
+ - **Categoría HOME en `MainActivity`**: resuelto, ver cambio 6.
+-- **Arranque automático (pendiente de decisión)**: `BootReceiver` y `CarPower` abren `MainActivity` al encender la radio y al conectar corriente (`wakeAndShowHome`), y `CarPower` puede cambiar el tiempo de apagado de pantalla (`WRITE_SETTINGS`). Sin HOME sigue abriéndose sola sobre el launcher original. Recomendado: desactivar por defecto y activar solo desde un ajuste explícito.
+-- **Clima**: si no hay ubicación, cae a coordenadas de Ciudad de México (`ForecastWeather.location()`), heredado del proyecto original. Debe sustituirse por un estado "sin ubicación" (Fase 3).
++- **Arranque automático**: resuelto en el cambio 9 (desactivado por defecto). Falta una pantalla de ajustes propia; por ahora el interruptor está en el menú ⏻. `BootReceiver` sigue registrado, pero no hace nada visible mientras la automatización esté apagada.
++- **Clima**: resuelto en el cambio 8. El respaldo por Bluetooth del celular no se modificó.
+ - **Memoria de imágenes**: `car360` (36) + `car_drive` (24) fotogramas de 720x328 RGBA ≈ 57 MB decodificados, cargados completos en hilos sin cancelar ni liberar. Revisar en la radio real (RAM sin verificar).
+ - **Arte del vehículo (Fase 4)**: los fotogramas son el arte heredado; no se verificó que correspondan a un Accent RB 2017 blanco ni se dispone de fotos del propietario en esta sesión. Bloqueado hasta tener referencias.
+ - **Velocidad**: falta un temporizador de "sin señal" cuando el GPS deja de emitir y comprobar precisión del fix (ver cambio 5).
+ - **Servicios opcionales** (accesibilidad, listener de notificaciones, overlay, Device Admin, `WRITE_SETTINGS`): conservados; falta revisar que cada uno se active solo por acción explícita.
+ - `compileSdk/targetSdk 34`: sin cambio (cambio separado cuando CI esté verde).
+ 
+-## Verificación
++## Verificación (ver `docs/TEST_RESULTS.md`)
+ 
+-- XML del manifest bien formado (comprobado).
+-- **No** se ejecutó `./gradlew clean test assembleDebug` (el entorno de trabajo no pudo descargar Gradle/AGP) ni se verificó el estado del CI. Estos cambios deben pasar por CI antes de considerarse válidos.
+-- No hay pruebas unitarias en el repo (`app/src/test` no existe).
++- Verificado: 20 pruebas JVM (lógica pura + manifest) compiladas con Kotlin 1.9.24 y ejecutadas con JDK 17 y JUnit 4.13.2; las pruebas fallan al reintroducir HOME o relajar la regla del GPS.
++- **No** compilado: `Dashboard.kt`, `ForecastWeather.kt`, `CarPower.kt`, `PowerMenu.kt` y `AutoStart.kt` dependen de Android; solo se comprobó que no tengan errores de sintaxis. Falta `./gradlew --no-daemon clean test assembleDebug` con Android SDK.
++- **No** hay ejecución de CI sobre estos cambios (no están publicados), ni APK, ni pruebas en emulador o en la radio.
+diff --git a/docs/INSTALL-AND-ROLLBACK.md b/docs/INSTALL-AND-ROLLBACK.md
+index da4caf9..8400f66 100644
+--- a/docs/INSTALL-AND-ROLLBACK.md
++++ b/docs/INSTALL-AND-ROLLBACK.md
+@@ -14,12 +14,17 @@ adb shell am start -n com.autosense.launcher/.MainActivity
+ ```
+ Si aparece un selector "Siempre / Solo una vez" al abrir, elegir **Solo una vez**. No marcar AutoSense como predeterminado.
+ 
++> Instalación sin ADB (por ejemplo desde una memoria USB o el administrador de archivos de la radio): **no verificada**. No hay conexión ADB con la K2001N todavía.
++
++## Automatización con el carro (desactivada por defecto)
++Al instalar, AutoSense **no** se abre sola, no enciende la pantalla, no cambia el tiempo de pantalla ni toca Bluetooth o música. Para activarla: menú ⏻ → "Automatización del auto". Para apagarla, la misma opción. Al desinstalar la app se pierde el ajuste.
++
+ ## Permisos opcionales (cada uno lo concede el usuario, nunca de forma silenciosa)
+ - Ubicación y Bluetooth (diálogo al abrir): velocidad GPS y estado BT.
+ - Superponer sobre otras apps, escribir ajustes del sistema, accesibilidad, acceso a notificaciones y administrador de dispositivo: se activan desde Ajustes de Android solo si se quiere esa función.
+ 
+ ## Reversión
+-1. Si AutoSense quedó como inicio: Ajustes > Apps > Apps predeterminadas > App de inicio → elegir el launcher de fábrica (paquete anotado en el respaldo). Por ADB: `adb shell pm clear com.autosense.launcher` no cambia el HOME; usar el menú de Ajustes.
++1. Esta versión no declara HOME y no debería ofrecerse como inicio. Si de todas formas quedó como inicio: Ajustes > Apps > Apps predeterminadas > App de inicio → elegir el launcher de fábrica (paquete anotado en el respaldo). Por ADB: `adb shell pm clear com.autosense.launcher` no cambia el HOME; usar el menú de Ajustes.
+ 2. Desactivar, si se activaron: accesibilidad, acceso a notificaciones, administrador de dispositivo.
+ 3. Desinstalar: `adb uninstall com.autosense.launcher` (o desde Ajustes > Apps).
+ 4. Verificar que la radio abre su launcher original tras reiniciar.
+diff --git a/docs/TEST_RESULTS.md b/docs/TEST_RESULTS.md
+new file mode 100644
+index 0000000..ea7d5e5
+--- /dev/null
++++ b/docs/TEST_RESULTS.md
+@@ -0,0 +1,42 @@
++# TEST_RESULTS
++
++Estado a la fecha de esta rama. Cada fila dice dónde se ejecutó. Nada de lo marcado NO VERIFICADO se debe dar por hecho.
++
++## Resumen por entorno
++
++| Entorno | Estado | Detalle |
++|---|---|---|
++| CI en GitHub (workflow *Android build*) | Éxito reportado solo para la ejecución del commit que agregó el workflow | Estos cambios no están publicados: **sin CI sobre ellos** |
++| Pruebas JVM de lógica pura (entorno de auditoría) | VERIFICADO: 20 de 20 | Kotlin 1.9.24, JDK 17.0.x, JUnit 4.13.2, Hamcrest 2.2; sin Gradle ni Android SDK |
++| Compilación local con Gradle y Android SDK | NO VERIFICADO | `./gradlew --no-daemon clean test assembleDebug` pendiente en el PC del propietario |
++| `lintDebug` | NO VERIFICADO | Pendiente |
++| APK debug y SHA-256 | NO VERIFICADO | No existe APK de estos cambios |
++| Emulador | NO VERIFICADO | |
++| Radio K2001N física | NO VERIFICADO | Sin ADB; ABI, resolución, densidad, GPU y RAM sin verificar |
++
++## Pruebas JVM ejecutadas (20)
++
++| Clase | Pruebas | Qué protege |
++|---|---|---|
++| `GpsFixPolicyTest` | 7 | Frescura del fix (0 s, 5 s exactos, 5 s + 1 ns, futuro), m/s a km/h, NaN, infinito y negativo = sin señal |
++| `WeatherLocationPolicyTest` | 6 | GPS primero, luego la última guardada, nunca una ciudad inventada, rangos y texto ilegible |
++| `AutoStartPolicyTest` | 2 | La automatización viene desactivada y respeta la elección guardada |
++| `ManifestDecisionsTest` | 5 | Sin HOME en `MainActivity` (con MAIN, LAUNCHER y DEFAULT), servicio `specialUse` con su permiso, `BLUETOOTH_CONNECT`, permisos BT antiguos hasta SDK 30, `BootReceiver` no exportado |
++
++Comprobación de que las pruebas no son vacías (mutaciones):
++- Reponer `category.HOME` en `MainActivity` → fallan 2 pruebas.
++- Aceptar fixes GPS de cualquier antigüedad → falla 1 prueba.
++Con el código restaurado vuelven a pasar las 20.
++
++## Qué falta cubrir
++- `Dashboard`, `ForecastWeather`, `CarPower`, `PowerMenu` y `AutoStart` dependen de Android; solo se revisó sintaxis (sin errores). Se compilan en el paso de Gradle.
++- Pruebas instrumentadas o de emulador: ninguna.
++
++## Registro local (completar en el PC del propietario)
++
++| Comando | Resultado | Fecha |
++|---|---|---|
++| `java -version` (debe ser 17) | | |
++| `.\gradlew.bat --no-daemon clean test assembleDebug` | | |
++| `.\gradlew.bat lintDebug` | | |
++| `Get-FileHash app\build\outputs\apk\debug\app-debug.apk -Algorithm SHA256` | | |
+-- 
+2.43.0
+

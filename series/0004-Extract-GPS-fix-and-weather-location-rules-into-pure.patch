@@ -1,0 +1,145 @@
+From 0d14ddb3a7649515bfc6d663dbdb1d662bba2bfb Mon Sep 17 00:00:00 2001
+From: audit <audit@example.invalid>
+Date: Sun, 1 Nov 2026 02:02:21 +0000
+Subject: [PATCH 4/7] Extract GPS-fix and weather-location rules into pure
+ Kotlin; stop defaulting weather to Mexico City
+
+---
+ .../java/com/autosense/launcher/Dashboard.kt  | 13 +++++--------
+ .../com/autosense/launcher/ForecastWeather.kt | 13 +++++++------
+ .../com/autosense/launcher/GpsFixPolicy.kt    | 19 +++++++++++++++++++
+ .../launcher/WeatherLocationPolicy.kt         | 19 +++++++++++++++++++
+ 4 files changed, 50 insertions(+), 14 deletions(-)
+ create mode 100644 AutoSense/app/src/main/java/com/autosense/launcher/GpsFixPolicy.kt
+ create mode 100644 AutoSense/app/src/main/java/com/autosense/launcher/WeatherLocationPolicy.kt
+
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt b/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
+index 1253e0f..5ef7ab7 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
+@@ -34,7 +34,6 @@ import android.widget.TextView
+ import java.text.SimpleDateFormat
+ import java.util.Date
+ import java.util.Locale
+-import kotlin.math.roundToInt
+ 
+ /**
+  * Lógica del tablero (reloj, clima, batería, velocímetro, música, navegación y pestañas),
+@@ -120,12 +119,12 @@ class Dashboard(
+         override fun onLocationChanged(location: Location) {
+             if (SystemClock.elapsedRealtime() <= debugSpeedUntil) return
+             // Solo se muestra velocidad de un fix GPS reciente (<= 5 s); si no, "Sin señal GPS" (-1)
+-            val ageNanos = SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
+-            if (location.hasSpeed() && ageNanos in 0..MAX_FIX_AGE_NANOS) {
+-                val kmh = (location.speed * 3.6f).roundToInt()
+-                showSpeed(kmh)
++            if (location.hasSpeed() &&
++                GpsFixPolicy.isFresh(SystemClock.elapsedRealtimeNanos(), location.elapsedRealtimeNanos)
++            ) {
++                showSpeed(GpsFixPolicy.speedKmh(location.speed))
+             } else {
+-                showSpeed(-1)
++                showSpeed(GpsFixPolicy.NO_SIGNAL)
+             }
+         }
+ 
+@@ -598,8 +597,6 @@ class Dashboard(
+     }
+ 
+     companion object {
+-        /** Antigüedad máxima (ns) de un fix GPS para mostrar su velocidad: 5 s. */
+-        private const val MAX_FIX_AGE_NANOS = 5_000_000_000L
+         val TAB_IDS = listOf(
+             R.id.tab_home, R.id.tab_mapa, R.id.tab_musica,
+             R.id.tab_telefono, R.id.tab_camara, R.id.tab_ajustes, R.id.tab_apps
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/ForecastWeather.kt b/AutoSense/app/src/main/java/com/autosense/launcher/ForecastWeather.kt
+index a9f2698..b1aedca 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/ForecastWeather.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/ForecastWeather.kt
+@@ -130,7 +130,10 @@ class ForecastWeather(private val context: Context) {
+     }
+ 
+     private fun download() {
+-        val (lat, lon) = location()
++        val (lat, lon) = location() ?: run {
++            Log.i(TAG, "Sin ubicación conocida: no se descarga el pronóstico")
++            return
++        }
+         val url = URL(
+             "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
+                     "&current=temperature_2m,apparent_temperature,weather_code,precipitation,is_day" +
+@@ -148,7 +151,7 @@ class ForecastWeather(private val context: Context) {
+     }
+ 
+     @SuppressLint("MissingPermission")
+-    private fun location(): Pair<Double, Double> {
++    private fun location(): Pair<Double, Double>? {
+         if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+             val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+             val best: Location? = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+@@ -162,10 +165,8 @@ class ForecastWeather(private val context: Context) {
+                 return Pair(best.latitude, best.longitude)
+             }
+         }
+-        // Última ubicación conocida o, si nunca hubo, Ciudad de México
+-        val lat = prefs.getString(KEY_LAT, null)?.toDoubleOrNull() ?: 19.43
+-        val lon = prefs.getString(KEY_LON, null)?.toDoubleOrNull() ?: -99.13
+-        return Pair(lat, lon)
++        // Última ubicación conocida; si nunca hubo, null (no se inventa una ciudad por defecto)
++        return WeatherLocationPolicy.resolve(null, null, prefs.getString(KEY_LAT, null), prefs.getString(KEY_LON, null))
+     }
+ 
+     companion object {
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/GpsFixPolicy.kt b/AutoSense/app/src/main/java/com/autosense/launcher/GpsFixPolicy.kt
+new file mode 100644
+index 0000000..798463d
+--- /dev/null
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/GpsFixPolicy.kt
+@@ -0,0 +1,19 @@
++package com.autosense.launcher
++
++import kotlin.math.roundToInt
++
++/** Reglas puras (sin Android) para decidir qué velocidad del GPS se muestra. */
++object GpsFixPolicy {
++    /** Antigüedad máxima (ns) de un fix GPS para mostrar su velocidad: 5 s. */
++    const val MAX_FIX_AGE_NANOS = 5_000_000_000L
++
++    /** Valor que el velocímetro interpreta como "sin señal GPS". */
++    const val NO_SIGNAL = -1
++
++    /** Un fix es reciente si no es del futuro y tiene como máximo [MAX_FIX_AGE_NANOS]. */
++    fun isFresh(nowNanos: Long, fixNanos: Long): Boolean = (nowNanos - fixNanos) in 0L..MAX_FIX_AGE_NANOS
++
++    /** m/s a km/h redondeado; un valor no válido (NaN, infinito o negativo) es [NO_SIGNAL]. */
++    fun speedKmh(speedMs: Float): Int =
++        if (speedMs.isNaN() || speedMs.isInfinite() || speedMs < 0f) NO_SIGNAL else (speedMs * 3.6f).roundToInt()
++}
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/WeatherLocationPolicy.kt b/AutoSense/app/src/main/java/com/autosense/launcher/WeatherLocationPolicy.kt
+new file mode 100644
+index 0000000..e21d96d
+--- /dev/null
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/WeatherLocationPolicy.kt
+@@ -0,0 +1,19 @@
++package com.autosense.launcher
++
++/**
++ * Elige la ubicación para el pronóstico: primero la del GPS, luego la última guardada.
++ * Si no hay ninguna válida devuelve null (antes se usaba Ciudad de México por defecto).
++ */
++object WeatherLocationPolicy {
++
++    fun isValid(lat: Double, lon: Double): Boolean =
++        lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0
++
++    fun resolve(gpsLat: Double?, gpsLon: Double?, storedLat: String?, storedLon: String?): Pair<Double, Double>? {
++        if (gpsLat != null && gpsLon != null && isValid(gpsLat, gpsLon)) return Pair(gpsLat, gpsLon)
++        val lat = storedLat?.toDoubleOrNull()
++        val lon = storedLon?.toDoubleOrNull()
++        if (lat != null && lon != null && isValid(lat, lon)) return Pair(lat, lon)
++        return null
++    }
++}
+-- 
+2.43.0
+

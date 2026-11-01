@@ -1,0 +1,49 @@
+From 6fc2c1f4264b65a26693b3e2cf76a17132608e0b Mon Sep 17 00:00:00 2001
+From: audit <audit@example.invalid>
+Date: Sat, 31 Oct 2026 20:43:03 +0000
+Subject: [PATCH 3/7] Remove HOME category from MainActivity: install as normal
+ app, keep stock launcher
+
+---
+ AutoSense/app/src/main/AndroidManifest.xml | 4 ++--
+ docs/CHANGELOG-K2001N.md                   | 4 +++-
+ 2 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/AutoSense/app/src/main/AndroidManifest.xml b/AutoSense/app/src/main/AndroidManifest.xml
+index c9f9984..38cdfb5 100644
+--- a/AutoSense/app/src/main/AndroidManifest.xml
++++ b/AutoSense/app/src/main/AndroidManifest.xml
+@@ -35,8 +35,8 @@
+             <intent-filter>
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.LAUNCHER" />
+-                <!-- Permite que AutoSense sea la pantalla de inicio de la tablet -->
+-                <category android:name="android.intent.category.HOME" />
++                <!-- Primera versión: app normal. Sin categoría HOME para no ofrecerse como inicio ni
++                     reemplazar el launcher original de la radio K2001N (decisión del propietario). -->
+                 <category android:name="android.intent.category.DEFAULT" />
+             </intent-filter>
+         </activity>
+diff --git a/docs/CHANGELOG-K2001N.md b/docs/CHANGELOG-K2001N.md
+index fbd68b2..99d6902 100644
+--- a/docs/CHANGELOG-K2001N.md
++++ b/docs/CHANGELOG-K2001N.md
+@@ -11,12 +11,14 @@ Rama: `work/k2001n-android15-audit`. Estado: **cambios sin compilar** (ver "Veri
+ | 3 | `AndroidManifest.xml`, `MainActivity.kt`, `Dashboard.kt` | Falta `BLUETOOTH_CONNECT` (Android 12+); `getProfileConnectionState()` lanzaría `SecurityException` en el refresco de estado. | Permiso añadido, solicitado en runtime tras el de ubicación, y el icono BT se degrada a "apagado" si no está concedido. `BLUETOOTH`/`BLUETOOTH_ADMIN` limitados a `maxSdkVersion=30`. |
+ | 5 | `Dashboard.kt` | La velocidad se mostraba con cualquier fix que trajera `hasSpeed()`, sin validar antigüedad; sin permiso de ubicación no se indicaba "sin señal". | Solo se muestra velocidad de un fix de ≤5 s; si no, o sin permiso, se muestra sin señal (-1). Limitación: no hay temporizador que marque "sin señal" si el GPS deja de emitir fixes. |
+ | 4 | `AndroidManifest.xml` | `BootReceiver` exportado sin necesidad (solo recibe `BOOT_COMPLETED`, difusión del sistema). | `exported="false"`. |
++| 6 | `AndroidManifest.xml` | `MainActivity` declaraba `category.HOME`: Android ofrecía AutoSense como inicio al pulsar Home. | Categoría HOME **eliminada** (decisión del propietario): se instala como app normal con icono LAUNCHER. Para ofrecerla otra vez como inicio habrá que reponerla de forma explícita. |
+ 
+ Los nombres de clases del manifest (`SplitScreenService`, `ScreenOffAdmin`, `BootReceiver`, `MediaListenerService`, `DriveOverlayService`, `DockActivity`, `AppsActivity`) **coinciden** con las clases reales.
+ 
+ ## Hallazgos NO corregidos (requieren decisión o datos)
+ 
+-- **Categoría HOME en `MainActivity`**: hace que Android ofrezca AutoSense como inicio al pulsar Home. No se autoasigna, pero contradice "primera instalación sin HOME". Decisión pendiente del propietario (opciones: quitarla en el primer build, o dejarla y probar la reversión).
++- **Categoría HOME en `MainActivity`**: resuelto, ver cambio 6.
++- **Arranque automático (pendiente de decisión)**: `BootReceiver` y `CarPower` abren `MainActivity` al encender la radio y al conectar corriente (`wakeAndShowHome`), y `CarPower` puede cambiar el tiempo de apagado de pantalla (`WRITE_SETTINGS`). Sin HOME sigue abriéndose sola sobre el launcher original. Recomendado: desactivar por defecto y activar solo desde un ajuste explícito.
+ - **Clima**: si no hay ubicación, cae a coordenadas de Ciudad de México (`ForecastWeather.location()`), heredado del proyecto original. Debe sustituirse por un estado "sin ubicación" (Fase 3).
+ - **Memoria de imágenes**: `car360` (36) + `car_drive` (24) fotogramas de 720x328 RGBA ≈ 57 MB decodificados, cargados completos en hilos sin cancelar ni liberar. Revisar en la radio real (RAM sin verificar).
+ - **Arte del vehículo (Fase 4)**: los fotogramas son el arte heredado; no se verificó que correspondan a un Accent RB 2017 blanco ni se dispone de fotos del propietario en esta sesión. Bloqueado hasta tener referencias.
+-- 
+2.43.0
+

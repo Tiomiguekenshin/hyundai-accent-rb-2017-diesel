@@ -1,0 +1,76 @@
+From b882867c48477ec8c49b9ca6de765b10c305d986 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 31 Oct 2026 20:36:45 +0000
+Subject: [PATCH 2/7] Show GPS speed only for fresh fixes; show no-signal state
+ without location permission
+
+---
+ .../main/java/com/autosense/launcher/Dashboard.kt  | 14 ++++++++++++--
+ docs/CHANGELOG-K2001N.md                           |  3 ++-
+ 2 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt b/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
+index f2897e7..1253e0f 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
+@@ -118,9 +118,14 @@ class Dashboard(
+     // Velocidad desde el GPS de la tablet (m/s -> km/h)
+     private val locationListener = object : LocationListener {
+         override fun onLocationChanged(location: Location) {
+-            if (location.hasSpeed() && SystemClock.elapsedRealtime() > debugSpeedUntil) {
++            if (SystemClock.elapsedRealtime() <= debugSpeedUntil) return
++            // Solo se muestra velocidad de un fix GPS reciente (<= 5 s); si no, "Sin señal GPS" (-1)
++            val ageNanos = SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
++            if (location.hasSpeed() && ageNanos in 0..MAX_FIX_AGE_NANOS) {
+                 val kmh = (location.speed * 3.6f).roundToInt()
+                 showSpeed(kmh)
++            } else {
++                showSpeed(-1)
+             }
+         }
+ 
+@@ -390,7 +395,10 @@ class Dashboard(
+     @SuppressLint("MissingPermission")
+     fun startGps() {
+         if (speedGauge == null) return
+-        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
++        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
++            speedGauge.speed = -1 // sin permiso no hay velocidad: se indica sin señal
++            return
++        }
+         if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+             locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locationListener)
+         } else {
+@@ -590,6 +598,8 @@ class Dashboard(
+     }
+ 
+     companion object {
++        /** Antigüedad máxima (ns) de un fix GPS para mostrar su velocidad: 5 s. */
++        private const val MAX_FIX_AGE_NANOS = 5_000_000_000L
+         val TAB_IDS = listOf(
+             R.id.tab_home, R.id.tab_mapa, R.id.tab_musica,
+             R.id.tab_telefono, R.id.tab_camara, R.id.tab_ajustes, R.id.tab_apps
+diff --git a/docs/CHANGELOG-K2001N.md b/docs/CHANGELOG-K2001N.md
+index 9f4dc94..fbd68b2 100644
+--- a/docs/CHANGELOG-K2001N.md
++++ b/docs/CHANGELOG-K2001N.md
+@@ -9,6 +9,7 @@ Rama: `work/k2001n-android15-audit`. Estado: **cambios sin compilar** (ver "Veri
+ | 1 | `AndroidManifest.xml`, `DriveOverlayService.kt` | Con `targetSdk 34`, Android 14+ exige tipo de servicio en primer plano; `startForeground()` sin tipo lanza `MissingForegroundServiceTypeException` al abrir el modo manejo. | Se declara `foregroundServiceType="specialUse"` + `FOREGROUND_SERVICE_SPECIAL_USE` + subtipo; en código se pasa el tipo en API 34+. |
+ | 2 | `Dashboard.kt` | `registerReceiver()` del receiver de depuración sin `RECEIVER_EXPORTED/NOT_EXPORTED` lanza `SecurityException` con `targetSdk 34` en Android 13+; solo ocurre en builds debug (justo el APK que se prueba). | Se registra con `RECEIVER_EXPORTED` en API 33+ (necesario para simular velocidad con `adb`). Sigue activo solo si el APK es depurable. |
+ | 3 | `AndroidManifest.xml`, `MainActivity.kt`, `Dashboard.kt` | Falta `BLUETOOTH_CONNECT` (Android 12+); `getProfileConnectionState()` lanzaría `SecurityException` en el refresco de estado. | Permiso añadido, solicitado en runtime tras el de ubicación, y el icono BT se degrada a "apagado" si no está concedido. `BLUETOOTH`/`BLUETOOTH_ADMIN` limitados a `maxSdkVersion=30`. |
++| 5 | `Dashboard.kt` | La velocidad se mostraba con cualquier fix que trajera `hasSpeed()`, sin validar antigüedad; sin permiso de ubicación no se indicaba "sin señal". | Solo se muestra velocidad de un fix de ≤5 s; si no, o sin permiso, se muestra sin señal (-1). Limitación: no hay temporizador que marque "sin señal" si el GPS deja de emitir fixes. |
+ | 4 | `AndroidManifest.xml` | `BootReceiver` exportado sin necesidad (solo recibe `BOOT_COMPLETED`, difusión del sistema). | `exported="false"`. |
+ 
+ Los nombres de clases del manifest (`SplitScreenService`, `ScreenOffAdmin`, `BootReceiver`, `MediaListenerService`, `DriveOverlayService`, `DockActivity`, `AppsActivity`) **coinciden** con las clases reales.
+@@ -19,7 +20,7 @@ Los nombres de clases del manifest (`SplitScreenService`, `ScreenOffAdmin`, `Boo
+ - **Clima**: si no hay ubicación, cae a coordenadas de Ciudad de México (`ForecastWeather.location()`), heredado del proyecto original. Debe sustituirse por un estado "sin ubicación" (Fase 3).
+ - **Memoria de imágenes**: `car360` (36) + `car_drive` (24) fotogramas de 720x328 RGBA ≈ 57 MB decodificados, cargados completos en hilos sin cancelar ni liberar. Revisar en la radio real (RAM sin verificar).
+ - **Arte del vehículo (Fase 4)**: los fotogramas son el arte heredado; no se verificó que correspondan a un Accent RB 2017 blanco ni se dispone de fotos del propietario en esta sesión. Bloqueado hasta tener referencias.
+-- **Velocidad**: `location.hasSpeed()` se acepta sin comprobar antigüedad/precisión del fix; revisar antes de mostrarla como "GPS válido".
++- **Velocidad**: falta un temporizador de "sin señal" cuando el GPS deja de emitir y comprobar precisión del fix (ver cambio 5).
+ - **Servicios opcionales** (accesibilidad, listener de notificaciones, overlay, Device Admin, `WRITE_SETTINGS`): conservados; falta revisar que cada uno se active solo por acción explícita.
+ - `compileSdk/targetSdk 34`: sin cambio (cambio separado cuando CI esté verde).
+ 
+-- 
+2.43.0
+

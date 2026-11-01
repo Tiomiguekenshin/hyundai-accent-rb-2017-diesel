@@ -1,0 +1,120 @@
+From 2ccf16067922f824e921ef2b966f4b2a74ce0c18 Mon Sep 17 00:00:00 2001
+From: audit <audit@example.invalid>
+Date: Sun, 1 Nov 2026 02:02:21 +0000
+Subject: [PATCH 5/7] Make car automation opt-in (default off): no auto-open,
+ wake, screen timeout or BT/music actions unless enabled from the power menu
+
+---
+ .../java/com/autosense/launcher/AutoStart.kt  | 19 +++++++++++++++++++
+ .../com/autosense/launcher/AutoStartPolicy.kt |  9 +++++++++
+ .../java/com/autosense/launcher/CarPower.kt   |  9 ++++++++-
+ .../java/com/autosense/launcher/PowerMenu.kt  | 10 ++++++++++
+ 4 files changed, 46 insertions(+), 1 deletion(-)
+ create mode 100644 AutoSense/app/src/main/java/com/autosense/launcher/AutoStart.kt
+ create mode 100644 AutoSense/app/src/main/java/com/autosense/launcher/AutoStartPolicy.kt
+
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/AutoStart.kt b/AutoSense/app/src/main/java/com/autosense/launcher/AutoStart.kt
+new file mode 100644
+index 0000000..8903e62
+--- /dev/null
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/AutoStart.kt
+@@ -0,0 +1,19 @@
++package com.autosense.launcher
++
++import android.content.Context
++
++/** Interruptor persistente de la automatización con el carro (menú del botón ⏻). */
++object AutoStart {
++    private const val PREFS = "car_power"
++    private const val KEY = "auto_enabled"
++
++    fun isEnabled(context: Context): Boolean {
++        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++        return AutoStartPolicy.effective(if (prefs.contains(KEY)) prefs.getBoolean(KEY, false) else null)
++    }
++
++    fun setEnabled(context: Context, enabled: Boolean) {
++        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++            .edit().putBoolean(KEY, enabled).apply()
++    }
++}
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/AutoStartPolicy.kt b/AutoSense/app/src/main/java/com/autosense/launcher/AutoStartPolicy.kt
+new file mode 100644
+index 0000000..f85daf5
+--- /dev/null
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/AutoStartPolicy.kt
+@@ -0,0 +1,9 @@
++package com.autosense.launcher
++
++/** Regla pura: la automatización con el carro viene desactivada salvo que el propietario la active. */
++object AutoStartPolicy {
++    /** Primera versión: AutoSense no se abre sola ni cambia ajustes del sistema. */
++    const val DEFAULT_ENABLED = false
++
++    fun effective(stored: Boolean?): Boolean = stored ?: DEFAULT_ENABLED
++}
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/CarPower.kt b/AutoSense/app/src/main/java/com/autosense/launcher/CarPower.kt
+index df8d4c4..64877e8 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/CarPower.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/CarPower.kt
+@@ -69,6 +69,8 @@ object CarPower {
+      * si el bloqueo es solo "deslizar" (sin PIN, patrón ni contraseña), lo descarta.
+      */
+     fun wakeAndShowHome(context: Context) {
++        // Primera versión: sin automatización no se enciende la pantalla ni se abre la app sola
++        if (!AutoStart.isEnabled(context)) return
+         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+         @Suppress("DEPRECATION")
+         pm.newWakeLock(
+@@ -115,6 +117,7 @@ object CarPower {
+      */
+     @android.annotation.SuppressLint("MissingPermission")
+     private fun connectCarAudio(context: Context) {
++        if (!AutoStart.isEnabled(context)) return
+         try {
+             val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+             if (adapter != null && !adapter.isEnabled) {
+@@ -153,6 +156,10 @@ object CarPower {
+ 
+     private fun onCarOff(context: Context) {
+         Log.i(TAG, "Corriente desconectada: la pantalla se apagará sola")
++        if (!AutoStart.isEnabled(context)) {
++            listeners.toList().forEach { it(false) }
++            return
++        }
+         // Pausa la música para que no siga sonando con el carro apagado; si estaba sonando,
+         // se recuerda para reanudarla al volver a arrancar
+         val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+@@ -166,7 +173,7 @@ object CarPower {
+     }
+ 
+     private fun setScreenTimeout(context: Context, ms: Int) {
+-        if (!Settings.System.canWrite(context)) return
++        if (!AutoStart.isEnabled(context) || !Settings.System.canWrite(context)) return
+         try {
+             Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, ms)
+         } catch (e: Exception) {
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/PowerMenu.kt b/AutoSense/app/src/main/java/com/autosense/launcher/PowerMenu.kt
+index 9a198ce..8b8f01c 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/PowerMenu.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/PowerMenu.kt
+@@ -49,6 +49,16 @@ object PowerMenu {
+         option("🌙  Apagar pantalla") { screenOff(activity) }
+         option("🔄  Reiniciar") { systemPowerMenu(activity) }
+         option("🔌  Apagar") { systemPowerMenu(activity) }
++        val autoOn = AutoStart.isEnabled(activity)
++        option(if (autoOn) "🚗  Automatización del auto: activada" else "🚗  Automatización del auto: desactivada") {
++            AutoStart.setEnabled(activity, !autoOn)
++            Toast.makeText(
++                activity,
++                if (autoOn) "Automatización desactivada: AutoSense no se abre sola"
++                else "Automatización activada: al dar corriente se enciende la pantalla y se abre AutoSense",
++                Toast.LENGTH_LONG
++            ).show()
++        }
+         dialog = AlertDialog.Builder(activity).setView(list).create()
+         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+         dialog.show()
+-- 
+2.43.0
+

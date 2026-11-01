@@ -1,0 +1,194 @@
+From bc91933fb0f721b373d01b608465ae4da1efff52 Mon Sep 17 00:00:00 2001
+From: audit <audit@example.invalid>
+Date: Sun, 1 Nov 2026 02:06:18 +0000
+Subject: [PATCH 6/7] Add JUnit 4 and 20 JVM unit tests (GPS, weather location,
+ auto-start default, manifest decisions)
+
+---
+ AutoSense/app/build.gradle.kts                |  4 +-
+ .../autosense/launcher/AutoStartPolicyTest.kt | 16 ++++++
+ .../autosense/launcher/GpsFixPolicyTest.kt    | 32 +++++++++++
+ .../launcher/ManifestDecisionsTest.kt         | 57 +++++++++++++++++++
+ .../launcher/WeatherLocationPolicyTest.kt     | 31 ++++++++++
+ 5 files changed, 139 insertions(+), 1 deletion(-)
+ create mode 100644 AutoSense/app/src/test/java/com/autosense/launcher/AutoStartPolicyTest.kt
+ create mode 100644 AutoSense/app/src/test/java/com/autosense/launcher/GpsFixPolicyTest.kt
+ create mode 100644 AutoSense/app/src/test/java/com/autosense/launcher/ManifestDecisionsTest.kt
+ create mode 100644 AutoSense/app/src/test/java/com/autosense/launcher/WeatherLocationPolicyTest.kt
+
+diff --git a/AutoSense/app/build.gradle.kts b/AutoSense/app/build.gradle.kts
+index 4cbaa4a..28be19c 100644
+--- a/AutoSense/app/build.gradle.kts
++++ b/AutoSense/app/build.gradle.kts
+@@ -33,5 +33,7 @@ android {
+ }
+ 
+ dependencies {
+-    // Sin librerías externas: solo framework de Android, para que corra ligero en 2 GB de RAM.
++    // Sin librerías externas en la app: solo framework de Android, para que corra ligero en 2 GB de RAM.
++    // Las pruebas unitarias (JVM) usan JUnit 4; no se empaqueta en el APK.
++    testImplementation("junit:junit:4.13.2")
+ }
+diff --git a/AutoSense/app/src/test/java/com/autosense/launcher/AutoStartPolicyTest.kt b/AutoSense/app/src/test/java/com/autosense/launcher/AutoStartPolicyTest.kt
+new file mode 100644
+index 0000000..1feb73d
+--- /dev/null
++++ b/AutoSense/app/src/test/java/com/autosense/launcher/AutoStartPolicyTest.kt
+@@ -0,0 +1,16 @@
++package com.autosense.launcher
++
++import org.junit.Assert.*
++import org.junit.Test
++
++class AutoStartPolicyTest {
++    @Test fun primeraVersionViajaDesactivada() {
++        assertFalse(AutoStartPolicy.DEFAULT_ENABLED)
++        assertFalse(AutoStartPolicy.effective(null))
++    }
++
++    @Test fun respetaLaEleccionGuardada() {
++        assertTrue(AutoStartPolicy.effective(true))
++        assertFalse(AutoStartPolicy.effective(false))
++    }
++}
+diff --git a/AutoSense/app/src/test/java/com/autosense/launcher/GpsFixPolicyTest.kt b/AutoSense/app/src/test/java/com/autosense/launcher/GpsFixPolicyTest.kt
+new file mode 100644
+index 0000000..463a3f4
+--- /dev/null
++++ b/AutoSense/app/src/test/java/com/autosense/launcher/GpsFixPolicyTest.kt
+@@ -0,0 +1,32 @@
++package com.autosense.launcher
++
++import org.junit.Assert.*
++import org.junit.Test
++
++class GpsFixPolicyTest {
++    private val now = 100_000_000_000L
++
++    @Test fun fixDeAhoraEsReciente() = assertTrue(GpsFixPolicy.isFresh(now, now))
++
++    @Test fun fixDeCincoSegundosExactosEsReciente() =
++        assertTrue(GpsFixPolicy.isFresh(now, now - GpsFixPolicy.MAX_FIX_AGE_NANOS))
++
++    @Test fun fixUnNanosegundoMasViejoNoEsReciente() =
++        assertFalse(GpsFixPolicy.isFresh(now, now - GpsFixPolicy.MAX_FIX_AGE_NANOS - 1))
++
++    @Test fun fixDelFuturoNoEsReciente() = assertFalse(GpsFixPolicy.isFresh(now, now + 1))
++
++    @Test fun conviertePorMetroPorSegundoAKmH() {
++        assertEquals(36, GpsFixPolicy.speedKmh(10f))
++        assertEquals(0, GpsFixPolicy.speedKmh(0f))
++        assertEquals(1, GpsFixPolicy.speedKmh(0.14f)) // 0,504 km/h se redondea a 1
++    }
++
++    @Test fun valoresInvalidosSonSinSenal() {
++        assertEquals(GpsFixPolicy.NO_SIGNAL, GpsFixPolicy.speedKmh(Float.NaN))
++        assertEquals(GpsFixPolicy.NO_SIGNAL, GpsFixPolicy.speedKmh(Float.POSITIVE_INFINITY))
++        assertEquals(GpsFixPolicy.NO_SIGNAL, GpsFixPolicy.speedKmh(-1f))
++    }
++
++    @Test fun sinSenalEsMenosUno() = assertEquals(-1, GpsFixPolicy.NO_SIGNAL)
++}
+diff --git a/AutoSense/app/src/test/java/com/autosense/launcher/ManifestDecisionsTest.kt b/AutoSense/app/src/test/java/com/autosense/launcher/ManifestDecisionsTest.kt
+new file mode 100644
+index 0000000..c7a9965
+--- /dev/null
++++ b/AutoSense/app/src/test/java/com/autosense/launcher/ManifestDecisionsTest.kt
+@@ -0,0 +1,57 @@
++package com.autosense.launcher
++
++import org.junit.Assert.*
++import org.junit.Test
++
++import org.w3c.dom.Element
++import java.io.File
++import javax.xml.parsers.DocumentBuilderFactory
++
++/** Protege las decisiones del propietario y las correcciones de Android 14+ escritas en el manifest. */
++class ManifestDecisionsTest {
++    private val ns = "http://schemas.android.com/apk/res/android"
++
++    private val doc = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
++        .newDocumentBuilder()
++        .parse(listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml").map { File(it) }.first { it.exists() })
++
++    private fun attr(e: Element, name: String) = e.getAttributeNS(ns, name)
++
++    private fun elements(tag: String) = doc.getElementsByTagName(tag).let { l -> (0 until l.length).map { l.item(it) as Element } }
++
++    private fun byName(tag: String, name: String) = elements(tag).first { attr(it, "name") == name }
++
++    private fun names(parent: Element, tag: String) =
++        parent.getElementsByTagName(tag).let { l -> (0 until l.length).map { attr(l.item(it) as Element, "name") } }
++
++    @Test fun mainActivityEsAppNormalSinCategoriaHome() {
++        val filter = byName("activity", ".MainActivity").getElementsByTagName("intent-filter").item(0) as Element
++        assertEquals(listOf("android.intent.action.MAIN"), names(filter, "action"))
++        val categories = names(filter, "category")
++        assertTrue(categories.contains("android.intent.category.LAUNCHER"))
++        assertTrue(categories.contains("android.intent.category.DEFAULT"))
++        assertFalse(categories.contains("android.intent.category.HOME"))
++    }
++
++    @Test fun ningunaActividadPideSerLauncherDelSistema() =
++        assertTrue(elements("category").none { attr(it, "name") == "android.intent.category.HOME" })
++
++    @Test fun servicioEnPrimerPlanoDeclaraTipoYPermisoDeAndroid14() {
++        val service = byName("service", ".DriveOverlayService")
++        assertEquals("specialUse", attr(service, "foregroundServiceType"))
++        assertEquals("false", attr(service, "exported"))
++        assertTrue(names(doc.documentElement, "uses-permission").contains("android.permission.FOREGROUND_SERVICE_SPECIAL_USE"))
++        assertTrue(names(service, "property").contains("android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"))
++    }
++
++    @Test fun bluetoothSeparaPermisosNuevosYAntiguos() {
++        assertTrue(names(doc.documentElement, "uses-permission").contains("android.permission.BLUETOOTH_CONNECT"))
++        for (legacy in listOf("android.permission.BLUETOOTH", "android.permission.BLUETOOTH_ADMIN")) {
++            val e = elements("uses-permission").first { attr(it, "name") == legacy }
++            assertEquals("30", attr(e, "maxSdkVersion"))
++        }
++    }
++
++    @Test fun bootReceiverNoEstaExpuesto() =
++        assertEquals("false", attr(byName("receiver", ".BootReceiver"), "exported"))
++}
+diff --git a/AutoSense/app/src/test/java/com/autosense/launcher/WeatherLocationPolicyTest.kt b/AutoSense/app/src/test/java/com/autosense/launcher/WeatherLocationPolicyTest.kt
+new file mode 100644
+index 0000000..9a043f1
+--- /dev/null
++++ b/AutoSense/app/src/test/java/com/autosense/launcher/WeatherLocationPolicyTest.kt
+@@ -0,0 +1,31 @@
++package com.autosense.launcher
++
++import org.junit.Assert.*
++import org.junit.Test
++
++class WeatherLocationPolicyTest {
++
++    @Test fun prefiereElGps() =
++        assertEquals(Pair(-34.1, -70.7), WeatherLocationPolicy.resolve(-34.1, -70.7, "10.0", "20.0"))
++
++    @Test fun sinGpsUsaLaUltimaGuardada() =
++        assertEquals(Pair(-34.1, -70.7), WeatherLocationPolicy.resolve(null, null, "-34.1", "-70.7"))
++
++    @Test fun sinNingunaUbicacionDevuelveNullYNoInventaCiudad() =
++        assertNull(WeatherLocationPolicy.resolve(null, null, null, null))
++
++    @Test fun gpsInvalidoCaeALaGuardada() =
++        assertEquals(Pair(1.0, 2.0), WeatherLocationPolicy.resolve(999.0, 0.0, "1.0", "2.0"))
++
++    @Test fun guardadaIlegibleDevuelveNull() {
++        assertNull(WeatherLocationPolicy.resolve(null, null, "abc", "20"))
++        assertNull(WeatherLocationPolicy.resolve(null, null, "NaN", "20"))
++        assertNull(WeatherLocationPolicy.resolve(null, null, "10", null))
++    }
++
++    @Test fun fueraDeRangoEsInvalido() {
++        assertFalse(WeatherLocationPolicy.isValid(90.1, 0.0))
++        assertFalse(WeatherLocationPolicy.isValid(0.0, -180.1))
++        assertTrue(WeatherLocationPolicy.isValid(-90.0, 180.0))
++    }
++}
+-- 
+2.43.0
+

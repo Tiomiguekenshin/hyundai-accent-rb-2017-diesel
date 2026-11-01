@@ -1,0 +1,240 @@
+From 0d366071fcf80ae4c4d759bffa5d674e7988a890 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 31 Oct 2026 20:35:13 +0000
+Subject: [PATCH 1/7] Fix Android 14+ runtime crashes: FGS type, debug receiver
+ flag, BLUETOOTH_CONNECT; add K2001N changelog and install/rollback docs
+
+---
+ AutoSense/app/src/main/AndroidManifest.xml    | 17 ++++++++---
+ .../java/com/autosense/launcher/Dashboard.kt  | 16 ++++++++--
+ .../autosense/launcher/DriveOverlayService.kt | 11 ++++++-
+ .../com/autosense/launcher/MainActivity.kt    | 13 ++++++--
+ docs/CHANGELOG-K2001N.md                      | 30 +++++++++++++++++++
+ docs/DEVICE_COMPATIBILITY_AND_TEST_PLAN.md    |  8 +++++
+ docs/INSTALL-AND-ROLLBACK.md                  | 27 +++++++++++++++++
+ 7 files changed, 113 insertions(+), 9 deletions(-)
+ create mode 100644 docs/CHANGELOG-K2001N.md
+ create mode 100644 docs/INSTALL-AND-ROLLBACK.md
+
+diff --git a/AutoSense/app/src/main/AndroidManifest.xml b/AutoSense/app/src/main/AndroidManifest.xml
+index 1adf2d9..c9f9984 100644
+--- a/AutoSense/app/src/main/AndroidManifest.xml
++++ b/AutoSense/app/src/main/AndroidManifest.xml
+@@ -9,8 +9,12 @@
+     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+-    <uses-permission android:name="android.permission.BLUETOOTH" />
+-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
++    <!-- Android 14+ (targetSdk 34): todo servicio en primer plano necesita tipo y permiso de tipo -->
++    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
++    <!-- Android 12+ separa el permiso de Bluetooth; los antiguos solo aplican hasta Android 11 -->
++    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
++    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
++    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+ 
+     <uses-feature
+@@ -66,7 +70,12 @@
+ 
+         <service
+             android:name=".DriveOverlayService"
+-            android:exported="false" />
++            android:exported="false"
++            android:foregroundServiceType="specialUse">
++            <property
++                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
++                android:value="Paneles flotantes del modo manejo (velocidad GPS, música y atajos) sobre la app de navegación" />
++        </service>
+ 
+         <service
+             android:name=".MediaListenerService"
+@@ -79,7 +88,7 @@
+         <!-- Al encender o reiniciar: pantalla encendida y directo al inicio -->
+         <receiver
+             android:name=".BootReceiver"
+-            android:exported="true">
++            android:exported="false">
+             <intent-filter>
+                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+             </intent-filter>
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt b/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
+index 4dfed9d..f2897e7 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/Dashboard.kt
+@@ -168,7 +168,10 @@ class Dashboard(
+         }
+         bluetoothView?.let { view ->
+             val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+-            val enabled = adapter?.isEnabled == true
++            // Android 12+: sin BLUETOOTH_CONNECT consultar el estado lanzaría SecurityException
++            val btAllowed = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S ||
++                context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
++            val enabled = btAllowed && adapter?.isEnabled == true
+             val connected = enabled && listOf(android.bluetooth.BluetoothProfile.A2DP, android.bluetooth.BluetoothProfile.HEADSET)
+                 .any { adapter?.getProfileConnectionState(it) == android.bluetooth.BluetoothProfile.STATE_CONNECTED }
+             // Azul: conectado a un equipo (carro, bocina) · blanco tenue: encendido · muy tenue: apagado
+@@ -210,7 +213,16 @@ class Dashboard(
+     private val isDebugBuild = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+ 
+     fun start() {
+-        if (isDebugBuild) context.registerReceiver(debugSpeedReceiver, IntentFilter("com.autosense.launcher.DEBUG_SPEED"))
++        if (isDebugBuild) {
++            // Solo build debug. Targeting 34+ exige indicar si el receiver es exportado; debe serlo para que
++            // `adb shell am broadcast` (otro uid) pueda simular velocidad.
++            val debugFilter = IntentFilter("com.autosense.launcher.DEBUG_SPEED")
++            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
++                context.registerReceiver(debugSpeedReceiver, debugFilter, Context.RECEIVER_EXPORTED)
++            } else {
++                context.registerReceiver(debugSpeedReceiver, debugFilter)
++            }
++        }
+         TAB_IDS.forEach { id -> root.findViewById<View>(id)?.setOnClickListener { onTab(id) } }
+         root.findViewById<View>(R.id.nav_card)?.setOnClickListener { onTab(R.id.tab_mapa) }
+         root.findViewById<View>(R.id.power_button)?.setOnClickListener { (context as? Activity)?.let { PowerMenu.show(it) } }
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/DriveOverlayService.kt b/AutoSense/app/src/main/java/com/autosense/launcher/DriveOverlayService.kt
+index 2ced1cc..e9a8123 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/DriveOverlayService.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/DriveOverlayService.kt
+@@ -43,7 +43,16 @@ class DriveOverlayService : Service() {
+     override fun onCreate() {
+         super.onCreate()
+         // Servicio en primer plano para que Android no lo cierre mientras se maneja
+-        startForeground(NOTIFICATION_ID, buildNotification())
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
++            // Android 14+: el tipo declarado en el manifest debe indicarse también aquí
++            startForeground(
++                NOTIFICATION_ID,
++                buildNotification(),
++                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
++            )
++        } else {
++            startForeground(NOTIFICATION_ID, buildNotification())
++        }
+         if (!Settings.canDrawOverlays(this)) {
+             stopSelf()
+             return
+diff --git a/AutoSense/app/src/main/java/com/autosense/launcher/MainActivity.kt b/AutoSense/app/src/main/java/com/autosense/launcher/MainActivity.kt
+index a5f7540..6c1022c 100644
+--- a/AutoSense/app/src/main/java/com/autosense/launcher/MainActivity.kt
++++ b/AutoSense/app/src/main/java/com/autosense/launcher/MainActivity.kt
+@@ -42,13 +42,21 @@ class MainActivity : Activity() {
+ 
+         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), REQUEST_LOCATION)
++        } else if (needsBluetoothPermission()) {
++            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQUEST_BLUETOOTH)
+         }
+     }
+ 
++    private fun needsBluetoothPermission() =
++        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
++            checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
++
+     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+-        if (requestCode == REQUEST_LOCATION && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+-            dashboard.startGps()
++        if (requestCode == REQUEST_LOCATION) {
++            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) dashboard.startGps()
++            // Un solo diálogo a la vez: el de Bluetooth se pide después del de ubicación
++            if (needsBluetoothPermission()) requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQUEST_BLUETOOTH)
+         }
+     }
+ 
+@@ -132,6 +140,7 @@ class MainActivity : Activity() {
+ 
+     companion object {
+         private const val REQUEST_LOCATION = 1
++        private const val REQUEST_BLUETOOTH = 2
+         const val EXTRA_FROM_CAR_ON = "from_car_on"
+     }
+ }
+diff --git a/docs/CHANGELOG-K2001N.md b/docs/CHANGELOG-K2001N.md
+new file mode 100644
+index 0000000..9f4dc94
+--- /dev/null
++++ b/docs/CHANGELOG-K2001N.md
+@@ -0,0 +1,30 @@
++# CHANGELOG-K2001N
++
++Rama: `work/k2001n-android15-audit`. Estado: **cambios sin compilar** (ver "Verificación").
++
++## Cambios (auditoría Fase 1, correcciones de bajo riesgo)
++
++| # | Archivo | Problema detectado (por lectura de código) | Cambio |
++|---|---------|---------------------------------------------|--------|
++| 1 | `AndroidManifest.xml`, `DriveOverlayService.kt` | Con `targetSdk 34`, Android 14+ exige tipo de servicio en primer plano; `startForeground()` sin tipo lanza `MissingForegroundServiceTypeException` al abrir el modo manejo. | Se declara `foregroundServiceType="specialUse"` + `FOREGROUND_SERVICE_SPECIAL_USE` + subtipo; en código se pasa el tipo en API 34+. |
++| 2 | `Dashboard.kt` | `registerReceiver()` del receiver de depuración sin `RECEIVER_EXPORTED/NOT_EXPORTED` lanza `SecurityException` con `targetSdk 34` en Android 13+; solo ocurre en builds debug (justo el APK que se prueba). | Se registra con `RECEIVER_EXPORTED` en API 33+ (necesario para simular velocidad con `adb`). Sigue activo solo si el APK es depurable. |
++| 3 | `AndroidManifest.xml`, `MainActivity.kt`, `Dashboard.kt` | Falta `BLUETOOTH_CONNECT` (Android 12+); `getProfileConnectionState()` lanzaría `SecurityException` en el refresco de estado. | Permiso añadido, solicitado en runtime tras el de ubicación, y el icono BT se degrada a "apagado" si no está concedido. `BLUETOOTH`/`BLUETOOTH_ADMIN` limitados a `maxSdkVersion=30`. |
++| 4 | `AndroidManifest.xml` | `BootReceiver` exportado sin necesidad (solo recibe `BOOT_COMPLETED`, difusión del sistema). | `exported="false"`. |
++
++Los nombres de clases del manifest (`SplitScreenService`, `ScreenOffAdmin`, `BootReceiver`, `MediaListenerService`, `DriveOverlayService`, `DockActivity`, `AppsActivity`) **coinciden** con las clases reales.
++
++## Hallazgos NO corregidos (requieren decisión o datos)
++
++- **Categoría HOME en `MainActivity`**: hace que Android ofrezca AutoSense como inicio al pulsar Home. No se autoasigna, pero contradice "primera instalación sin HOME". Decisión pendiente del propietario (opciones: quitarla en el primer build, o dejarla y probar la reversión).
++- **Clima**: si no hay ubicación, cae a coordenadas de Ciudad de México (`ForecastWeather.location()`), heredado del proyecto original. Debe sustituirse por un estado "sin ubicación" (Fase 3).
++- **Memoria de imágenes**: `car360` (36) + `car_drive` (24) fotogramas de 720x328 RGBA ≈ 57 MB decodificados, cargados completos en hilos sin cancelar ni liberar. Revisar en la radio real (RAM sin verificar).
++- **Arte del vehículo (Fase 4)**: los fotogramas son el arte heredado; no se verificó que correspondan a un Accent RB 2017 blanco ni se dispone de fotos del propietario en esta sesión. Bloqueado hasta tener referencias.
++- **Velocidad**: `location.hasSpeed()` se acepta sin comprobar antigüedad/precisión del fix; revisar antes de mostrarla como "GPS válido".
++- **Servicios opcionales** (accesibilidad, listener de notificaciones, overlay, Device Admin, `WRITE_SETTINGS`): conservados; falta revisar que cada uno se active solo por acción explícita.
++- `compileSdk/targetSdk 34`: sin cambio (cambio separado cuando CI esté verde).
++
++## Verificación
++
++- XML del manifest bien formado (comprobado).
++- **No** se ejecutó `./gradlew clean test assembleDebug` (el entorno de trabajo no pudo descargar Gradle/AGP) ni se verificó el estado del CI. Estos cambios deben pasar por CI antes de considerarse válidos.
++- No hay pruebas unitarias en el repo (`app/src/test` no existe).
+diff --git a/docs/DEVICE_COMPATIBILITY_AND_TEST_PLAN.md b/docs/DEVICE_COMPATIBILITY_AND_TEST_PLAN.md
+index 04fe867..1f480b8 100644
+--- a/docs/DEVICE_COMPATIBILITY_AND_TEST_PLAN.md
++++ b/docs/DEVICE_COMPATIBILITY_AND_TEST_PLAN.md
+@@ -71,3 +71,11 @@ Solo después de conocer ABI, resolución, densidad, GPU/OpenGL ES y fabricante/
+ 
+ ## Resultado esperado
+ Un launcher Android compilable y adaptable, con documentación honesta de compatibilidad, recursos visuales consistentes del Accent RB blanco y un APK debug reproducible. La validación física de la radio será una etapa separada y explícita.
++
++## Matriz de resultados (2026-10-31)
++| Puerta | Estado | Evidencia |
++|--------|--------|-----------|
++| A — compilación CI | **No verificada** | No se pudo consultar el CI ni compilar localmente en esta sesión |
++| B — emulador | **No ejecutada** | Sin emulador disponible |
++| C — K2001N real | **No ejecutada** | Sin acceso a la radio; ABI, resolución, densidad y GPU siguen pendientes |
++| Auditoría estática de manifest/código | Hecha (parcial) | Ver `docs/CHANGELOG-K2001N.md` |
+diff --git a/docs/INSTALL-AND-ROLLBACK.md b/docs/INSTALL-AND-ROLLBACK.md
+new file mode 100644
+index 0000000..da4caf9
+--- /dev/null
++++ b/docs/INSTALL-AND-ROLLBACK.md
+@@ -0,0 +1,27 @@
++# Instalación y reversión — AutoSense en K2001N
++
++> El APK debug es solo de prueba. **No está validado en la radio.** No hay flasheo, root, fastboot ni cambios de MCU/CANBUS en este procedimiento.
++
++## Antes de instalar
++1. Completar el respaldo de `docs/SAFETY_BACKUP_AND_AUDIT.md` (inventario ADB, paquete del launcher HOME original, capturas).
++2. Descargar el artefacto `autosense-debug-apk` del workflow *Android build* (solo si la ejecución está en `success`) y verificar su hash: `sha256sum app-debug.apk` debe coincidir con el publicado en el log del job.
++
++## Instalación (app normal, sin HOME)
++```bash
++adb devices
++adb install -r app-debug.apk
++adb shell am start -n com.autosense.launcher/.MainActivity
++```
++Si aparece un selector "Siempre / Solo una vez" al abrir, elegir **Solo una vez**. No marcar AutoSense como predeterminado.
++
++## Permisos opcionales (cada uno lo concede el usuario, nunca de forma silenciosa)
++- Ubicación y Bluetooth (diálogo al abrir): velocidad GPS y estado BT.
++- Superponer sobre otras apps, escribir ajustes del sistema, accesibilidad, acceso a notificaciones y administrador de dispositivo: se activan desde Ajustes de Android solo si se quiere esa función.
++
++## Reversión
++1. Si AutoSense quedó como inicio: Ajustes > Apps > Apps predeterminadas > App de inicio → elegir el launcher de fábrica (paquete anotado en el respaldo). Por ADB: `adb shell pm clear com.autosense.launcher` no cambia el HOME; usar el menú de Ajustes.
++2. Desactivar, si se activaron: accesibilidad, acceso a notificaciones, administrador de dispositivo.
++3. Desinstalar: `adb uninstall com.autosense.launcher` (o desde Ajustes > Apps).
++4. Verificar que la radio abre su launcher original tras reiniciar.
++
++Procedimiento de reversión **aún no probado** en la K2001N.
+-- 
+2.43.0
+
